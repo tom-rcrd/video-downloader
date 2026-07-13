@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <title>akiHome - Downloader</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app">
+    <header class="app-header">
+      <h1>akiHome - <i>Downloader</i></h1>
+      <div class="app-header-actions">
+        <button id="theme-toggle" class="pill-btn" type="button">Mode sombre</button>
+        <button id="ai-settings-toggle" class="pill-btn" type="button">
+          Réglages IA
+          <span class="pill-badge">+</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="ai-settings-panel" class="modal-overlay hidden">
+      <div class="modal">
+        <div class="modal-header">
+          <p class="modal-title">Réglages IA</p>
+          <button id="ai-settings-close-btn" type="button" class="modal-close-btn" aria-label="Fermer">×</button>
+        </div>
+
+        <label for="ollama-model-select">Modèle Ollama</label>
+        <div class="folder-row">
+          <select id="ollama-model-select"></select>
+          <button id="ollama-refresh-btn" type="button">Rafraîchir</button>
+        </div>
+        <p id="ollama-status" class="muted"></p>
+
+        <label for="searx-url-input">Instance SearxNG</label>
+        <input id="searx-url-input" type="text" placeholder="http://localhost:8080/search" />
+
+        <button id="ai-settings-save-btn" class="primary modal-save-btn">Enregistrer</button>
+      </div>
+    </div>
+
+    <div id="cross-ref-loading-overlay" class="modal-overlay hidden">
+      <div class="modal cross-ref-loading-modal">
+        <p class="modal-title">Recherche en cours...</p>
+        <div class="analyze-progress">
+          <div class="analyze-progress-bar"></div>
+        </div>
+        <button id="cross-ref-cancel-btn" type="button" class="primary subtle cross-ref-cancel-btn">Annuler</button>
+      </div>
+    </div>
+
+    <div class="main-container">
+      <div class="hero">
+        <div class="hero-inner">
+          <div class="url-row">
+            <input id="url-input" type="text" placeholder="Colle un lien de vidéo (YouTube, Vimeo, TikTok, Twitter/X, ...)" />
+            <button id="analyze-btn" class="primary">Analyser</button>
+          </div>
+
+          <div id="analyze-progress" class="analyze-progress hidden">
+            <div class="analyze-progress-bar"></div>
+          </div>
+
+          <p id="error-msg" class="error hidden"></p>
+        </div>
+      </div>
+
+      <div class="layout">
+        <div class="col col-main">
+          <section id="preview" class="card preview hidden">
+            <p class="fiche-label">Vidéo</p>
+            <div class="preview-body">
+              <img id="preview-thumb" alt="Miniature de la vidéo" />
+              <div class="preview-info">
+                <p id="preview-title"></p>
+                <p id="preview-uploader" class="muted"></p>
+              </div>
+            </div>
+          </section>
+
+          <section id="options" class="card options hidden">
+            <p class="fiche-label">Export</p>
+            <label for="quality-select-trigger">Qualité</label>
+            <div id="quality-select" class="custom-select">
+              <button type="button" id="quality-select-trigger" class="custom-select-trigger" aria-haspopup="listbox" aria-expanded="false">
+                <span id="quality-select-value">Meilleure qualité (fusion vidéo+audio)</span>
+                <span class="custom-select-arrow" aria-hidden="true">▾</span>
+              </button>
+              <ul id="quality-select-menu" class="custom-select-menu hidden" role="listbox">
+                <li data-value="best" role="option" aria-selected="true" tabindex="0" class="active">Meilleure qualité (fusion vidéo+audio)</li>
+                <li data-value="1080p" role="option" aria-selected="false" tabindex="0">1080p max</li>
+                <li data-value="720p" role="option" aria-selected="false" tabindex="0">720p max</li>
+                <li data-value="480p" role="option" aria-selected="false" tabindex="0">480p max</li>
+                <li data-value="audio" role="option" aria-selected="false" tabindex="0">Audio seulement (MP3)</li>
+              </ul>
+            </div>
+
+            <label>Dossier d'export (genre)</label>
+            <div id="category-chips" class="category-chips"></div>
+            <div id="category-add-form" class="category-add-form hidden">
+              <input id="category-name-input" type="text" placeholder="Nom du dossier (ex: Musique)" />
+              <button id="category-add-confirm-btn">Choisir dossier et ajouter</button>
+              <button id="category-add-cancel-btn">Annuler</button>
+            </div>
+
+            <label>Dossier de destination</label>
+            <div class="folder-row">
+              <input id="folder-path" class="muted" type="text" readonly />
+              <button id="choose-folder-btn">Choisir...</button>
+            </div>
+          </section>
+
+          <section id="progress-section" class="card progress-section hidden">
+            <div class="progress-bar">
+              <div id="progress-fill" class="progress-fill"></div>
+            </div>
+            <p id="progress-text" class="muted"></p>
+          </section>
+
+          <section id="done-section" class="card done-section hidden">
+            <p>Téléchargement terminé.</p>
+            <button id="open-folder-btn">Ouvrir le dossier</button>
+          </section>
+
+          <button id="download-btn" class="primary hidden">Télécharger</button>
+        </div>
+
+        <div class="col col-side">
+          <section id="fiche-section" class="card fiche-section hidden">
+            <p class="fiche-label">Fiche</p>
+            <dl id="fiche-fields" class="fiche-list"></dl>
+
+            <div id="cross-ref-section" class="cross-ref-section hidden">
+              <div class="cross-ref-actions">
+                <button id="cross-ref-btn" type="button" class="primary subtle">Rechercher une source alternative (IA)</button>
+                <button id="apply-all-btn" type="button" class="primary subtle hidden">Tout remplacer</button>
+              </div>
+              <div id="cross-ref-result" class="cross-ref-result hidden">
+                <p id="cross-ref-note"></p>
+                <p id="cross-ref-source" class="muted hidden">Source : <a id="cross-ref-source-link" href="#" target="_blank" rel="noopener"></a></p>
+              </div>
+            </div>
+          </section>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="renderer.js"></script>
+</body>
+</html>
