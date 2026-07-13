@@ -1,11 +1,16 @@
 const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
+const { autoUpdater } = require('electron-updater');
 const path = require('path');
 const { spawn } = require('child_process');
 const fs = require('fs');
 const crypto = require('crypto');
 
-const YT_DLP_PATH = path.join(__dirname, 'bin', 'yt-dlp.exe');
-const DEFAULT_DOWNLOAD_DIR = path.join(__dirname, 'downloads');
+const YT_DLP_PATH = app.isPackaged
+  ? path.join(process.resourcesPath, 'bin', 'yt-dlp.exe')
+  : path.join(__dirname, 'bin', 'yt-dlp.exe');
+const DEFAULT_DOWNLOAD_DIR = app.isPackaged
+  ? path.join(app.getPath('videos'), 'akiHome Downloader')
+  : path.join(__dirname, 'downloads');
 const OLLAMA_BASE_URL = 'http://localhost:11434';
 const DEFAULT_SEARX_URL = 'http://localhost:8080/search';
 const BROWSER_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36';
@@ -162,9 +167,47 @@ app.whenReady().then(() => {
   settingsFile = path.join(app.getPath('userData'), 'settings.json');
   createWindow();
 
+  if (app.isPackaged) {
+    autoUpdater.checkForUpdates().catch((err) => {
+      console.error('Vérification des mises à jour échouée:', err);
+    });
+  }
+
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
+});
+
+autoUpdater.on('update-available', (info) => {
+  dialog.showMessageBox(mainWindow, {
+    type: 'info',
+    title: 'Mise à jour disponible',
+    message: `La version ${info.version} est disponible.`,
+    detail: 'Veux-tu la télécharger maintenant ?',
+    buttons: ['Télécharger', 'Plus tard'],
+    defaultId: 0,
+    cancelId: 1,
+  }).then((result) => {
+    if (result.response === 0) autoUpdater.downloadUpdate();
+  });
+});
+
+autoUpdater.on('update-downloaded', (info) => {
+  dialog.showMessageBox(mainWindow, {
+    type: 'info',
+    title: 'Mise à jour prête',
+    message: `La version ${info.version} a été téléchargée.`,
+    detail: "Redémarrer l'application maintenant pour l'installer ?",
+    buttons: ['Redémarrer', 'Plus tard'],
+    defaultId: 0,
+    cancelId: 1,
+  }).then((result) => {
+    if (result.response === 0) autoUpdater.quitAndInstall();
+  });
+});
+
+autoUpdater.on('error', (err) => {
+  console.error('Erreur de mise à jour automatique:', err);
 });
 
 app.on('window-all-closed', () => {
