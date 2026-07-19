@@ -173,6 +173,19 @@ async function isDockerReady() {
   }
 }
 
+// Fermer la fenêtre (comme un clic sur la croix) la cache sans quitter le
+// programme ni arrêter son serveur - seulement fait quand c'est nous qui
+// venons de le lancer, pour ne pas fermer une fenêtre que l'utilisateur avait
+// déjà ouverte lui-même.
+function hideAppWindow(processName) {
+  execFile(
+    'powershell.exe',
+    ['-NoProfile', '-Command', `Get-Process "${processName}" -ErrorAction SilentlyContinue | ForEach-Object { $_.CloseMainWindow() } | Out-Null`],
+    { windowsHide: true },
+    () => {}
+  );
+}
+
 // Le conteneur a besoin du format JSON activé (désactivé par défaut sur l'image
 // SearxNG), donc on lui fournit un settings.yml minimal (basé sur use_default_settings)
 // avec un secret généré une seule fois par installation et réutilisé ensuite.
@@ -241,6 +254,8 @@ async function ensureSearxngContainer(onStatus = () => {}) {
       onStatus('Docker met trop de temps à démarrer, réessaie plus tard.', { showDownloadLink: true });
       return;
     }
+    // Laisse le temps au Dashboard de finir de s'afficher avant d'essayer de le fermer.
+    setTimeout(() => hideAppWindow('Docker Desktop'), 2000);
   }
 
   onStatus('Démarrage du moteur de recherche...');
@@ -301,6 +316,7 @@ async function ensureOllamaRunning(onStatus = () => {}) {
     onStatus("Impossible de lancer Ollama.");
     return;
   }
+  setTimeout(() => hideAppWindow('ollama app'), 2000);
 
   const deadline = Date.now() + 20000;
   while (Date.now() < deadline) {
