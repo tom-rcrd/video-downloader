@@ -114,6 +114,7 @@ dockerRequiredDownloadBtn.addEventListener('click', () => {
 
 const EDITABLE_FIELDS = [
   { key: 'synopsis', label: 'Synopsis', multiline: true },
+  { key: 'genres', label: 'Genres' },
   { key: 'year', label: 'Année' },
   { key: 'director', label: 'Réalisateur' },
   { key: 'country', label: 'Nationalité' },
@@ -123,7 +124,6 @@ const EDITABLE_FIELDS = [
 
 const READONLY_FIELDS = [
   { key: 'duration', label: 'Durée' },
-  { key: 'genres', label: 'Genres' },
   { key: 'tags', label: 'Tags' },
 ];
 
@@ -543,6 +543,7 @@ async function analyzeVideo() {
 
     ficheState = {
       synopsis: info.description || '',
+      genres: (info.categories && info.categories.length) ? info.categories.join(', ') : '',
       year: info.year || '',
       director: '',
       country: '',
@@ -551,7 +552,6 @@ async function analyzeVideo() {
     };
     ficheReadonly = {
       duration: formatDuration(info.duration) || '—',
-      genres: (info.categories && info.categories.length) ? info.categories.join(', ') : '—',
       tags: (info.tags && info.tags.length) ? info.tags.join(', ') : '—',
     };
     ficheSuggestions = {};
