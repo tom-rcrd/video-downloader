@@ -17,6 +17,7 @@ const DEFAULT_DOWNLOAD_DIR = app.isPackaged
 const OLLAMA_BASE_URL = 'http://localhost:11434';
 const DEFAULT_SEARX_URL = 'http://localhost:8080/search';
 const DOCKER_DESKTOP_PATH = 'C:\\Program Files\\Docker\\Docker\\Docker Desktop.exe';
+const OLLAMA_APP_PATH = path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Ollama', 'ollama app.exe');
 const SEARXNG_CONTAINER_NAME = 'searxng';
 const DOCKER_DOWNLOAD_URL = 'https://www.docker.com/products/docker-desktop/';
 const OLLAMA_DOWNLOAD_URL = 'https://ollama.com/download';
@@ -269,6 +270,47 @@ async function ensureSearxngContainer(onStatus = () => {}) {
     });
 }
 
+async function isOllamaReady() {
+  try {
+    const res = await fetch(`${OLLAMA_BASE_URL}/api/tags`, { signal: AbortSignal.timeout(3000) });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+// Contrairement à Docker Desktop, Ollama n'a pas besoin de VM/WSL et démarre en
+// quelques secondes : on peut se permettre d'attendre avant d'ouvrir la fenêtre.
+async function ensureOllamaRunning(onStatus = () => {}) {
+  if (process.platform !== 'win32') return;
+
+  onStatus("Vérification d'Ollama...");
+  if (await isOllamaReady()) return;
+
+  if (!fs.existsSync(OLLAMA_APP_PATH)) {
+    console.error("Ollama n'est pas installé.");
+    onStatus("Ollama n'est pas installé.");
+    return;
+  }
+
+  onStatus("Lancement d'Ollama...");
+  try {
+    spawn(OLLAMA_APP_PATH, [], { detached: true, stdio: 'ignore' }).unref();
+  } catch (err) {
+    console.error('Impossible de lancer Ollama:', err);
+    onStatus("Impossible de lancer Ollama.");
+    return;
+  }
+
+  const deadline = Date.now() + 20000;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 1500));
+    if (await isOllamaReady()) return;
+  }
+  console.error('Ollama ne répond pas après 20s.');
+  onStatus('Ollama ne répond pas.');
+}
+
 let splashWindow;
 
 function createSplashWindow() {
@@ -333,11 +375,21 @@ app.whenReady().then(async () => {
   await ensureSearxngContainer(broadcastDockerStatus).catch((err) => {
     console.error('Démarrage automatique de SearxNG échoué:', err);
   });
-  const minSplashTime = splashShowedDownloadLink ? 5000 : 600;
-  const remaining = minSplashTime - (Date.now() - splashStart);
-  if (remaining > 0) {
-    await new Promise((resolve) => setTimeout(resolve, remaining));
+  // On laisse le temps de lire (et cliquer) le message Docker avant de passer à
+  // la vérification d'Ollama, qui réutilise la même ligne de statut de la splash.
+  const dockerMinSplashTime = splashShowedDownloadLink ? 5000 : 600;
+  const dockerRemaining = dockerMinSplashTime - (Date.now() - splashStart);
+  if (dockerRemaining > 0) {
+    await new Promise((resolve) => setTimeout(resolve, dockerRemaining));
   }
+
+  await ensureOllamaRunning((message) => {
+    if (splashWindow && !splashWindow.isDestroyed()) {
+      splashWindow.webContents.send('docker-status', { message });
+    }
+  }).catch((err) => {
+    console.error("Démarrage automatique d'Ollama échoué:", err);
+  });
 
   createWindow();
   if (splashWindow && !splashWindow.isDestroyed()) {
