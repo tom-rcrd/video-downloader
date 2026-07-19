@@ -1,7 +1,7 @@
 const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const { autoUpdater } = require('electron-updater');
 const path = require('path');
-const { spawn } = require('child_process');
+const { spawn, execFile } = require('child_process');
 const fs = require('fs');
 const crypto = require('crypto');
 
@@ -13,6 +13,8 @@ const DEFAULT_DOWNLOAD_DIR = app.isPackaged
   : path.join(__dirname, 'downloads');
 const OLLAMA_BASE_URL = 'http://localhost:11434';
 const DEFAULT_SEARX_URL = 'http://localhost:8080/search';
+const DOCKER_DESKTOP_PATH = 'C:\\Program Files\\Docker\\Docker\\Docker Desktop.exe';
+const SEARXNG_CONTAINER_NAME = 'searxng';
 const BROWSER_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36';
 
 let mainWindow;
@@ -143,6 +145,97 @@ function parseJsonLoose(text) {
   }
 }
 
+function execFileAsync(cmd, args) {
+  return new Promise((resolve, reject) => {
+    execFile(cmd, args, { timeout: 10000, windowsHide: true }, (err, stdout, stderr) => {
+      if (err) reject(err);
+      else resolve({ stdout, stderr });
+    });
+  });
+}
+
+async function isDockerReady() {
+  try {
+    await execFileAsync('docker', ['info']);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Docker Desktop ne démarre pas avec Windows et ne relance pas ses conteneurs
+// automatiquement : on le lance nous-mêmes puis on redémarre le conteneur SearxNG
+// utilisé par la fonctionnalité "cross-reference" avant que l'utilisateur en ait besoin.
+async function ensureSearxngContainer(onStatus = () => {}) {
+  if (process.platform !== 'win32') return;
+
+  onStatus('Vérification de Docker...');
+  if (!(await isDockerReady())) {
+    if (!fs.existsSync(DOCKER_DESKTOP_PATH)) {
+      onStatus('Docker Desktop introuvable.');
+      return;
+    }
+    onStatus('Lancement de Docker Desktop...');
+    try {
+      spawn(DOCKER_DESKTOP_PATH, [], { detached: true, stdio: 'ignore' }).unref();
+    } catch (err) {
+      console.error('Impossible de lancer Docker Desktop:', err);
+      onStatus('Impossible de lancer Docker Desktop.');
+      return;
+    }
+
+    onStatus('En attente du démarrage de Docker...');
+    const deadline = Date.now() + 90000;
+    let ready = false;
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 3000));
+      ready = await isDockerReady();
+      if (ready) break;
+    }
+    if (!ready) {
+      console.error('Docker Desktop ne répond pas après 90s.');
+      onStatus('Docker met trop de temps à démarrer, réessaie plus tard.');
+      return;
+    }
+  }
+
+  onStatus('Démarrage du moteur de recherche...');
+  try {
+    await execFileAsync('docker', ['start', SEARXNG_CONTAINER_NAME]);
+    onStatus('Prêt !');
+  } catch (err) {
+    console.error(`Impossible de démarrer le conteneur "${SEARXNG_CONTAINER_NAME}":`, err.message || err);
+    onStatus('Le service de recherche est indisponible.');
+  }
+}
+
+let splashWindow;
+
+function createSplashWindow() {
+  splashWindow = new BrowserWindow({
+    width: 420,
+    height: 220,
+    frame: false,
+    resizable: false,
+    show: false,
+    center: true,
+    autoHideMenuBar: true,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload-splash.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+  splashWindow.loadFile(path.join(__dirname, 'renderer', 'splash.html'));
+  splashWindow.once('ready-to-show', () => splashWindow.show());
+}
+
+function sendSplashStatus(message) {
+  if (splashWindow && !splashWindow.isDestroyed()) {
+    splashWindow.webContents.send('docker-status', message);
+  }
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1360,
@@ -159,13 +252,28 @@ function createWindow() {
   mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   if (!fs.existsSync(DEFAULT_DOWNLOAD_DIR)) {
     fs.mkdirSync(DEFAULT_DOWNLOAD_DIR, { recursive: true });
   }
   categoriesFile = path.join(app.getPath('userData'), 'categories.json');
   settingsFile = path.join(app.getPath('userData'), 'settings.json');
+
+  createSplashWindow();
+
+  const minSplashTime = new Promise((resolve) => setTimeout(resolve, 600));
+  await Promise.all([
+    ensureSearxngContainer(sendSplashStatus).catch((err) => {
+      console.error('Démarrage automatique de SearxNG échoué:', err);
+    }),
+    minSplashTime,
+  ]);
+
   createWindow();
+  if (splashWindow && !splashWindow.isDestroyed()) {
+    splashWindow.close();
+  }
+  splashWindow = null;
 
   if (app.isPackaged) {
     autoUpdater.checkForUpdates().catch((err) => {

@@ -1,6 +1,6 @@
 {
   "name": "video-downloader",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Petit outil desktop pour telecharger des videos YouTube",
   "main": "main.js",
   "private": true,
@@ -14,6 +14,7 @@
     "files": [
       "main.js",
       "preload.js",
+      "preload-splash.js",
       "renderer/**/*",
       "package.json"
     ],
