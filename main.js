@@ -512,13 +512,46 @@ function isValidUrl(url) {
   }
 }
 
+// yt-dlp a besoin d'exécuter du JS pour déchiffrer certaines vidéos YouTube
+// (sinon "403 Forbidden" sur ces vidéos précises). Le Node.js intégré à
+// Electron est détecté mais jugé incompatible par yt-dlp : on cherche donc un
+// vrai Node.js installé sur le système, si disponible.
+let nodeJsPathPromise;
+function findSystemNodeJs() {
+  if (!nodeJsPathPromise) {
+    nodeJsPathPromise = (async () => {
+      const candidates = [];
+      if (process.env.ProgramFiles) candidates.push(path.join(process.env.ProgramFiles, 'nodejs', 'node.exe'));
+      if (process.env['ProgramFiles(x86)']) candidates.push(path.join(process.env['ProgramFiles(x86)'], 'nodejs', 'node.exe'));
+      for (const candidate of candidates) {
+        if (fs.existsSync(candidate)) return candidate;
+      }
+      try {
+        const { stdout } = await execFileAsync('where', ['node']);
+        const first = stdout.split(/\r?\n/).map((l) => l.trim()).find(Boolean);
+        if (first && fs.existsSync(first)) return first;
+      } catch {
+        // Pas de Node.js système disponible.
+      }
+      return null;
+    })();
+  }
+  return nodeJsPathPromise;
+}
+
+async function getYtDlpJsRuntimeArgs() {
+  const nodePath = await findSystemNodeJs();
+  return nodePath ? ['--js-runtimes', `node:${nodePath}`] : [];
+}
+
 ipcMain.handle('analyze', async (_event, url) => {
   if (!isValidUrl(url)) {
     throw new Error('Lien invalide.');
   }
 
+  const jsRuntimeArgs = await getYtDlpJsRuntimeArgs();
   return new Promise((resolve, reject) => {
-    const child = spawn(YT_DLP_PATH, ['-j', '--no-playlist', url]);
+    const child = spawn(YT_DLP_PATH, [...jsRuntimeArgs, '-j', '--no-playlist', url]);
     let stdout = '';
     let stderr = '';
 
@@ -652,6 +685,7 @@ ipcMain.handle('download', async (event, { url, quality, destFolder, category, o
   }
 
   const args = [
+    ...(await getYtDlpJsRuntimeArgs()),
     '--no-playlist',
     '--newline',
     '-f', preset.format,
