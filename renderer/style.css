@@ -245,6 +245,22 @@ button:disabled {
   font-size: 1rem;
 }
 
+.docker-banner {
+  margin: 18px 0 0;
+  padding: 10px 16px;
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-border);
+  color: var(--text);
+  font-size: 0.85rem;
+  text-align: center;
+}
+
+.docker-banner a {
+  color: var(--primary);
+  font-weight: 600;
+}
+
 .analyze-progress {
   position: relative;
   width: 100%;
@@ -827,6 +843,16 @@ select option {
   align-items: center;
   gap: 12px;
   flex-wrap: wrap;
+}
+
+#cross-ref-unavailable-msg {
+  margin-top: 10px;
+  font-size: 0.85rem;
+}
+
+#cross-ref-unavailable-msg a {
+  color: var(--primary);
+  font-weight: 600;
 }
 
 .cross-ref-result {

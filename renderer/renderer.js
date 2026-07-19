@@ -45,7 +45,6 @@ const searxUrlInput = document.getElementById('searx-url-input');
 const aiSettingsSaveBtn = document.getElementById('ai-settings-save-btn');
 const aiSettingsCloseBtn = document.getElementById('ai-settings-close-btn');
 
-const crossRefSection = document.getElementById('cross-ref-section');
 const crossRefBtn = document.getElementById('cross-ref-btn');
 const applyAllBtn = document.getElementById('apply-all-btn');
 const crossRefResult = document.getElementById('cross-ref-result');
@@ -54,6 +53,64 @@ const crossRefSource = document.getElementById('cross-ref-source');
 const crossRefSourceLink = document.getElementById('cross-ref-source-link');
 const crossRefLoadingOverlay = document.getElementById('cross-ref-loading-overlay');
 const crossRefCancelBtn = document.getElementById('cross-ref-cancel-btn');
+const crossRefUnavailableMsg = document.getElementById('cross-ref-unavailable-msg');
+const ollamaBannerLink = document.getElementById('ollama-banner-link');
+
+ollamaBannerLink.addEventListener('click', (e) => {
+  e.preventDefault();
+  window.api.openOllamaDownload();
+});
+
+const dockerBanner = document.getElementById('docker-banner');
+const dockerBannerLink = document.getElementById('docker-banner-link');
+const dockerBannerDownloadMsg = document.getElementById('docker-banner-download-msg');
+const dockerBannerStatusMsg = document.getElementById('docker-banner-status-msg');
+const dockerRequiredModal = document.getElementById('docker-required-modal');
+const dockerRequiredCloseBtn = document.getElementById('docker-required-close-btn');
+const dockerRequiredDownloadBtn = document.getElementById('docker-required-download-btn');
+
+let dockerReady = true;
+
+function applyDockerStatus(status) {
+  dockerReady = !!(status && status.ready);
+  dockerBanner.classList.toggle('hidden', dockerReady);
+  if (dockerReady) return;
+  const showDownloadLink = !!(status && status.showDownloadLink);
+  dockerBannerDownloadMsg.classList.toggle('hidden', !showDownloadLink);
+  dockerBannerStatusMsg.classList.toggle('hidden', showDownloadLink);
+  if (!showDownloadLink) {
+    dockerBannerStatusMsg.textContent = (status && status.message) || '';
+  }
+}
+
+async function initDockerStatus() {
+  try {
+    const status = await window.api.getDockerStatus();
+    applyDockerStatus(status);
+  } catch {
+    applyDockerStatus({ ready: true });
+  }
+}
+initDockerStatus();
+
+window.api.onDockerStatus((status) => applyDockerStatus(status));
+
+dockerBannerLink.addEventListener('click', (e) => {
+  e.preventDefault();
+  window.api.openDockerDownload();
+});
+
+function showDockerRequiredModal() {
+  dockerRequiredModal.classList.remove('hidden');
+}
+
+dockerRequiredCloseBtn.addEventListener('click', () => {
+  dockerRequiredModal.classList.add('hidden');
+});
+
+dockerRequiredDownloadBtn.addEventListener('click', () => {
+  window.api.openDockerDownload();
+});
 
 const EDITABLE_FIELDS = [
   { key: 'synopsis', label: 'Synopsis', multiline: true },
@@ -239,6 +296,7 @@ let selectedQuality = 'best';
 
 function updateAiControlsAvailability() {
   crossRefBtn.disabled = !hasOllamaModel;
+  crossRefUnavailableMsg.classList.toggle('hidden', hasOllamaModel);
 }
 
 function closeQualityMenu() {
@@ -297,7 +355,7 @@ async function refreshOllamaModels(selectedModel) {
   ollamaModelSelect.innerHTML = '';
 
   if (models.length === 0) {
-    ollamaStatus.textContent = "Ollama non détecté - installe-le (ollama.com) puis lance 'ollama pull llama3.2'.";
+    ollamaStatus.textContent = "Ollama non détecté - installe-le (ollama.com) puis lance 'ollama pull qwen2.5'.";
     hasOllamaModel = false;
     updateAiControlsAvailability();
     return;
@@ -504,7 +562,6 @@ async function analyzeVideo() {
     crossRefNote.textContent = '';
     crossRefSource.classList.add('hidden');
     applyAllBtn.classList.add('hidden');
-    crossRefSection.classList.toggle('hidden', !hasOllamaModel);
 
     document.body.classList.add('has-result');
   } catch (err) {
@@ -570,6 +627,10 @@ crossRefCancelBtn.addEventListener('click', () => {
 
 crossRefBtn.addEventListener('click', async () => {
   if (!lastAnalyzedInfo) return;
+  if (!dockerReady) {
+    showDockerRequiredModal();
+    return;
+  }
   crossRefBtn.disabled = true;
   crossRefBtn.textContent = 'Recherche...';
   crossRefResult.classList.add('hidden');
@@ -611,8 +672,15 @@ crossRefBtn.addEventListener('click', async () => {
     }
     renderFicheSuggestions();
   } catch (err) {
-    crossRefResult.classList.remove('hidden');
-    crossRefNote.textContent = err.message || 'La recherche a échoué.';
+    const message = err.message || '';
+    if (message.includes('SearxNG')) {
+      dockerReady = false;
+      dockerBanner.classList.remove('hidden');
+      showDockerRequiredModal();
+    } else {
+      crossRefResult.classList.remove('hidden');
+      crossRefNote.textContent = message || 'La recherche a échoué.';
+    }
   } finally {
     crossRefBtn.disabled = !hasOllamaModel;
     crossRefBtn.textContent = 'Rechercher une source alternative (IA)';

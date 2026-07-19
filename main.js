@@ -8,6 +8,9 @@ const crypto = require('crypto');
 const YT_DLP_PATH = app.isPackaged
   ? path.join(process.resourcesPath, 'bin', 'yt-dlp.exe')
   : path.join(__dirname, 'bin', 'yt-dlp.exe');
+const SEARXNG_SETTINGS_TEMPLATE_PATH = app.isPackaged
+  ? path.join(process.resourcesPath, 'searxng-settings.yml')
+  : path.join(__dirname, 'resources', 'searxng-settings.yml');
 const DEFAULT_DOWNLOAD_DIR = app.isPackaged
   ? path.join(app.getPath('videos'), 'akiHome Downloader')
   : path.join(__dirname, 'downloads');
@@ -15,6 +18,8 @@ const OLLAMA_BASE_URL = 'http://localhost:11434';
 const DEFAULT_SEARX_URL = 'http://localhost:8080/search';
 const DOCKER_DESKTOP_PATH = 'C:\\Program Files\\Docker\\Docker\\Docker Desktop.exe';
 const SEARXNG_CONTAINER_NAME = 'searxng';
+const DOCKER_DOWNLOAD_URL = 'https://www.docker.com/products/docker-desktop/';
+const OLLAMA_DOWNLOAD_URL = 'https://ollama.com/download';
 const BROWSER_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36';
 
 let mainWindow;
@@ -145,11 +150,15 @@ function parseJsonLoose(text) {
   }
 }
 
-function execFileAsync(cmd, args) {
+function execFileAsync(cmd, args, options = {}) {
   return new Promise((resolve, reject) => {
-    execFile(cmd, args, { timeout: 10000, windowsHide: true }, (err, stdout, stderr) => {
-      if (err) reject(err);
-      else resolve({ stdout, stderr });
+    execFile(cmd, args, { timeout: 10000, windowsHide: true, ...options }, (err, stdout, stderr) => {
+      if (err) {
+        err.stderr = stderr;
+        reject(err);
+      } else {
+        resolve({ stdout, stderr });
+      }
     });
   });
 }
@@ -163,6 +172,40 @@ async function isDockerReady() {
   }
 }
 
+// Le conteneur a besoin du format JSON activé (désactivé par défaut sur l'image
+// SearxNG), donc on lui fournit un settings.yml minimal (basé sur use_default_settings)
+// avec un secret généré une seule fois par installation et réutilisé ensuite.
+function getSearxngSettingsPath() {
+  const generatedPath = path.join(app.getPath('userData'), 'searxng-settings.yml');
+  if (!fs.existsSync(generatedPath)) {
+    const template = fs.readFileSync(SEARXNG_SETTINGS_TEMPLATE_PATH, 'utf8');
+    const secret = crypto.randomBytes(24).toString('hex');
+    fs.writeFileSync(generatedPath, template.replace('__SECRET_KEY__', secret));
+  }
+  return generatedPath;
+}
+
+async function createSearxngContainer() {
+  const settingsPath = getSearxngSettingsPath();
+  await execFileAsync(
+    'docker',
+    [
+      'run',
+      '-d',
+      '--name',
+      SEARXNG_CONTAINER_NAME,
+      '--restart',
+      'unless-stopped',
+      '-p',
+      '8080:8080',
+      '-v',
+      `${settingsPath}:/etc/searxng/settings.yml:ro`,
+      'searxng/searxng',
+    ],
+    { timeout: 5 * 60 * 1000 }
+  );
+}
+
 // Docker Desktop ne démarre pas avec Windows et ne relance pas ses conteneurs
 // automatiquement : on le lance nous-mêmes puis on redémarre le conteneur SearxNG
 // utilisé par la fonctionnalité "cross-reference" avant que l'utilisateur en ait besoin.
@@ -172,7 +215,7 @@ async function ensureSearxngContainer(onStatus = () => {}) {
   onStatus('Vérification de Docker...');
   if (!(await isDockerReady())) {
     if (!fs.existsSync(DOCKER_DESKTOP_PATH)) {
-      onStatus('Docker Desktop introuvable.');
+      onStatus("Docker Desktop n'est pas installé.", { showDownloadLink: true });
       return;
     }
     onStatus('Lancement de Docker Desktop...');
@@ -180,7 +223,7 @@ async function ensureSearxngContainer(onStatus = () => {}) {
       spawn(DOCKER_DESKTOP_PATH, [], { detached: true, stdio: 'ignore' }).unref();
     } catch (err) {
       console.error('Impossible de lancer Docker Desktop:', err);
-      onStatus('Impossible de lancer Docker Desktop.');
+      onStatus('Impossible de lancer Docker Desktop.', { showDownloadLink: true });
       return;
     }
 
@@ -194,7 +237,7 @@ async function ensureSearxngContainer(onStatus = () => {}) {
     }
     if (!ready) {
       console.error('Docker Desktop ne répond pas après 90s.');
-      onStatus('Docker met trop de temps à démarrer, réessaie plus tard.');
+      onStatus('Docker met trop de temps à démarrer, réessaie plus tard.', { showDownloadLink: true });
       return;
     }
   }
@@ -202,11 +245,28 @@ async function ensureSearxngContainer(onStatus = () => {}) {
   onStatus('Démarrage du moteur de recherche...');
   try {
     await execFileAsync('docker', ['start', SEARXNG_CONTAINER_NAME]);
-    onStatus('Prêt !');
+    onStatus('Prêt !', { ready: true });
+    return;
   } catch (err) {
-    console.error(`Impossible de démarrer le conteneur "${SEARXNG_CONTAINER_NAME}":`, err.message || err);
-    onStatus('Le service de recherche est indisponible.');
+    const containerMissing = /No such container/i.test(err.stderr || err.message || '');
+    if (!containerMissing) {
+      console.error(`Impossible de démarrer le conteneur "${SEARXNG_CONTAINER_NAME}":`, err.message || err);
+      onStatus('Le service de recherche est indisponible.');
+      return;
+    }
   }
+
+  // Premier lancement : le conteneur n'existe pas encore et l'image doit être
+  // téléchargée (peut prendre plusieurs minutes). On ne bloque pas le démarrage
+  // de l'app pour ça : la fenêtre principale s'ouvre tout de suite et la bannière
+  // Docker se met à jour en direct quand l'installation se termine.
+  onStatus("Installation du moteur de recherche en arrière-plan (première utilisation)...");
+  createSearxngContainer()
+    .then(() => onStatus('Prêt !', { ready: true }))
+    .catch((err) => {
+      console.error('Impossible de créer le conteneur SearxNG:', err.stderr || err.message || err);
+      onStatus("Impossible d'installer le service de recherche.");
+    });
 }
 
 let splashWindow;
@@ -214,7 +274,7 @@ let splashWindow;
 function createSplashWindow() {
   splashWindow = new BrowserWindow({
     width: 420,
-    height: 220,
+    height: 260,
     frame: false,
     resizable: false,
     show: false,
@@ -230,9 +290,17 @@ function createSplashWindow() {
   splashWindow.once('ready-to-show', () => splashWindow.show());
 }
 
-function sendSplashStatus(message) {
+let splashShowedDownloadLink = false;
+let latestDockerStatus = { message: '', ready: false, showDownloadLink: false };
+
+function broadcastDockerStatus(message, options = {}) {
+  latestDockerStatus = { message, ready: false, showDownloadLink: false, ...options };
+  if (options.showDownloadLink) splashShowedDownloadLink = true;
   if (splashWindow && !splashWindow.isDestroyed()) {
-    splashWindow.webContents.send('docker-status', message);
+    splashWindow.webContents.send('docker-status', { message, ...options });
+  }
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('docker-status', { message, ...options });
   }
 }
 
@@ -261,13 +329,15 @@ app.whenReady().then(async () => {
 
   createSplashWindow();
 
-  const minSplashTime = new Promise((resolve) => setTimeout(resolve, 600));
-  await Promise.all([
-    ensureSearxngContainer(sendSplashStatus).catch((err) => {
-      console.error('Démarrage automatique de SearxNG échoué:', err);
-    }),
-    minSplashTime,
-  ]);
+  const splashStart = Date.now();
+  await ensureSearxngContainer(broadcastDockerStatus).catch((err) => {
+    console.error('Démarrage automatique de SearxNG échoué:', err);
+  });
+  const minSplashTime = splashShowedDownloadLink ? 5000 : 600;
+  const remaining = minSplashTime - (Date.now() - splashStart);
+  if (remaining > 0) {
+    await new Promise((resolve) => setTimeout(resolve, remaining));
+  }
 
   createWindow();
   if (splashWindow && !splashWindow.isDestroyed()) {
@@ -549,6 +619,16 @@ ipcMain.handle('choose-folder', async () => {
 ipcMain.handle('open-folder', async (_event, folderPath) => {
   await shell.openPath(folderPath || DEFAULT_DOWNLOAD_DIR);
 });
+
+ipcMain.on('open-docker-download', () => {
+  shell.openExternal(DOCKER_DOWNLOAD_URL);
+});
+
+ipcMain.on('open-ollama-download', () => {
+  shell.openExternal(OLLAMA_DOWNLOAD_URL);
+});
+
+ipcMain.handle('get-docker-status', () => latestDockerStatus);
 
 ipcMain.handle('get-categories', async () => readCategories());
 

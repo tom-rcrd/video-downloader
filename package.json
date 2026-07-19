@@ -1,6 +1,6 @@
 {
   "name": "video-downloader",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Petit outil desktop pour telecharger des videos YouTube",
   "main": "main.js",
   "private": true,
@@ -22,6 +22,10 @@
       {
         "from": "bin",
         "to": "bin"
+      },
+      {
+        "from": "resources/searxng-settings.yml",
+        "to": "searxng-settings.yml"
       }
     ],
     "win": {

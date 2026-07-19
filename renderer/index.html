@@ -49,6 +49,17 @@
       </div>
     </div>
 
+    <div id="docker-required-modal" class="modal-overlay hidden">
+      <div class="modal">
+        <div class="modal-header">
+          <p class="modal-title">Docker requis</p>
+          <button id="docker-required-close-btn" type="button" class="modal-close-btn" aria-label="Fermer">×</button>
+        </div>
+        <p>La recherche de source alternative (IA) a besoin de Docker Desktop pour lancer le moteur de recherche, et il n'est pas détecté sur cet ordinateur.</p>
+        <button id="docker-required-download-btn" type="button" class="primary modal-save-btn">Télécharger Docker Desktop</button>
+      </div>
+    </div>
+
     <div class="main-container">
       <div class="hero">
         <div class="hero-inner">
@@ -130,11 +141,14 @@
             <p class="fiche-label">Fiche</p>
             <dl id="fiche-fields" class="fiche-list"></dl>
 
-            <div id="cross-ref-section" class="cross-ref-section hidden">
+            <div id="cross-ref-section" class="cross-ref-section">
               <div class="cross-ref-actions">
                 <button id="cross-ref-btn" type="button" class="primary subtle">Rechercher une source alternative (IA)</button>
                 <button id="apply-all-btn" type="button" class="primary subtle hidden">Tout remplacer</button>
               </div>
+              <p id="cross-ref-unavailable-msg" class="muted hidden">
+                Cette fonctionnalité nécessite <a id="ollama-banner-link" href="#">Ollama</a> ainsi qu'un modèle installé (ex : Qwen).
+              </p>
               <div id="cross-ref-result" class="cross-ref-result hidden">
                 <p id="cross-ref-note"></p>
                 <p id="cross-ref-source" class="muted hidden">Source : <a id="cross-ref-source-link" href="#" target="_blank" rel="noopener"></a></p>
@@ -144,6 +158,11 @@
         </div>
       </div>
     </div>
+
+    <p id="docker-banner" class="docker-banner hidden">
+      <span id="docker-banner-download-msg">Docker n'est pas installé, veuillez le télécharger <a id="docker-banner-link" href="#">ici</a>.</span>
+      <span id="docker-banner-status-msg" class="hidden"></span>
+    </p>
   </div>
 
   <script src="renderer.js"></script>

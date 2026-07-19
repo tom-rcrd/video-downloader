@@ -81,6 +81,24 @@
       color: var(--text-muted);
       min-height: 18px;
     }
+    #download-btn {
+      -webkit-app-region: no-drag;
+      margin-top: 16px;
+      padding: 9px 18px;
+      border: none;
+      border-radius: 999px;
+      background: var(--primary);
+      color: #fff;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    #download-btn:hover {
+      background: var(--primary-hover);
+    }
+    #download-btn.hidden {
+      display: none;
+    }
   </style>
 </head>
 <body>
@@ -89,6 +107,7 @@
     <p class="subtitle">Bienvenue</p>
     <div class="track"><div class="bar"></div></div>
     <p id="status">Veuillez patienter...</p>
+    <button id="download-btn" type="button" class="hidden">Télécharger Docker Desktop</button>
   </div>
   <script src="splash.js"></script>
 </body>
