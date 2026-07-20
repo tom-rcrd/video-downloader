@@ -278,12 +278,14 @@ const categoryNameInput = document.getElementById('category-name-input');
 const categoryAddConfirmBtn = document.getElementById('category-add-confirm-btn');
 const categoryAddCancelBtn = document.getElementById('category-add-cancel-btn');
 
-const progressSection = document.getElementById('progress-section');
+const progressSection = document.getElementById('download-progress-overlay');
 const progressFill = document.getElementById('progress-fill');
 const progressText = document.getElementById('progress-text');
+const downloadCancelBtn = document.getElementById('download-cancel-btn');
 
 const doneSection = document.getElementById('done-section');
 const openFolderBtn = document.getElementById('open-folder-btn');
+const cancelMsg = document.getElementById('cancel-msg');
 
 let selectedFolder = null;
 let selectedCategory = null;
@@ -511,6 +513,37 @@ function formatDuration(seconds) {
   return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
 }
 
+function normalizeForComparison(value) {
+  return String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+function isSimilarToCurrentValue(key, value) {
+  return normalizeForComparison(ficheState[key]) === normalizeForComparison(value);
+}
+
+async function autoFillMetadataFromDescription(info) {
+  if (!hasOllamaModel || !info.description) return;
+  try {
+    const fields = await window.api.extractVideoMetadata({ title: info.title, description: info.description });
+    if (!fields) return;
+    // Contrairement aux suggestions de la recherche de source alternative (une
+    // source externe, à vérifier avant de remplacer quoi que ce soit), ceci vient
+    // de la description de la vidéo elle-même : on l'applique donc directement.
+    for (const field of EDITABLE_FIELDS) {
+      const value = fields[field.key];
+      if (value && value !== 'null') {
+        ficheState[field.key] = String(value);
+        if (ficheInputs[field.key]) {
+          ficheInputs[field.key].value = String(value);
+          ficheInputs[field.key].classList.add('applied');
+        }
+      }
+    }
+  } catch (err) {
+    console.error('Extraction automatique des métadonnées échouée:', err);
+  }
+}
+
 async function analyzeVideo() {
   const url = urlInput.value.trim();
   clearError();
@@ -564,6 +597,8 @@ async function analyzeVideo() {
     applyAllBtn.classList.add('hidden');
 
     document.body.classList.add('has-result');
+
+    autoFillMetadataFromDescription(info);
   } catch (err) {
     showError(err.message || 'Impossible d\'analyser ce lien.');
   } finally {
@@ -591,8 +626,10 @@ downloadBtn.addEventListener('click', async () => {
 
   clearError();
   doneSection.classList.add('hidden');
+  cancelMsg.classList.add('hidden');
   progressSection.classList.remove('hidden');
-  progressFill.style.width = '0%';
+  progressFill.classList.add('indeterminate');
+  progressFill.style.width = '';
   progressText.textContent = 'Démarrage...';
   downloadBtn.disabled = true;
 
@@ -605,12 +642,15 @@ downloadBtn.addEventListener('click', async () => {
       overrides: ficheState,
     });
     lastOutputDir = result.outputDir;
-    progressFill.style.width = '100%';
-    progressText.textContent = 'Terminé.';
+    progressSection.classList.add('hidden');
     doneSection.classList.remove('hidden');
   } catch (err) {
-    showError(err.message || 'Le téléchargement a échoué.');
     progressSection.classList.add('hidden');
+    if (err.message && err.message.includes('Téléchargement annulé')) {
+      cancelMsg.classList.remove('hidden');
+    } else {
+      showError(err.message || 'Le téléchargement a échoué.');
+    }
   } finally {
     downloadBtn.disabled = false;
   }
@@ -618,6 +658,10 @@ downloadBtn.addEventListener('click', async () => {
 
 openFolderBtn.addEventListener('click', () => {
   window.api.openFolder(lastOutputDir);
+});
+
+downloadCancelBtn.addEventListener('click', () => {
+  window.api.cancelDownload();
 });
 
 crossRefCancelBtn.addEventListener('click', () => {
@@ -666,7 +710,7 @@ crossRefBtn.addEventListener('click', async () => {
     const fields = result.fields || {};
     for (const field of EDITABLE_FIELDS) {
       const value = fields[field.key];
-      if (value && value !== 'null') {
+      if (value && value !== 'null' && !isSimilarToCurrentValue(field.key, value)) {
         ficheSuggestions[field.key] = String(value);
       }
     }
@@ -688,7 +732,14 @@ crossRefBtn.addEventListener('click', async () => {
   }
 });
 
-window.api.onProgress(({ percent, speed, eta }) => {
+window.api.onProgress(({ percent, speed, eta, stage }) => {
+  if (stage) {
+    progressFill.classList.add('indeterminate');
+    progressFill.style.width = '';
+    progressText.textContent = stage;
+    return;
+  }
+  progressFill.classList.remove('indeterminate');
   progressFill.style.width = `${percent}%`;
   const parts = [`${percent.toFixed(1)}%`];
   if (speed) parts.push(speed);

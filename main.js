@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, Notification } = require('electron');
 const { autoUpdater } = require('electron-updater');
 const path = require('path');
 const { spawn, execFile } = require('child_process');
@@ -17,6 +17,21 @@ const DEFAULT_DOWNLOAD_DIR = app.isPackaged
 const OLLAMA_BASE_URL = 'http://localhost:11434';
 const DEFAULT_SEARX_URL = 'http://localhost:8080/search';
 const GENRE_LIST = ['Cinéma', 'Documentaire', 'Série', 'Animation', 'Musique', 'Sport', 'Actualités', 'Talk-show', 'Spectacle', 'Jeunesse'];
+// yt-dlp ne montre une progression en % que pendant le téléchargement lui-même :
+// avant (analyse, miniature) et après (fusion, métadonnées) il ne reste que ces
+// lignes préfixées par tag, sans quoi la barre semble figée pendant plusieurs
+// secondes alors que le travail continue bel et bien.
+const DOWNLOAD_STAGE_LABELS = {
+  youtube: 'Analyse de la vidéo...',
+  info: 'Récupération des informations...',
+  ThumbnailsConvertor: 'Conversion de la miniature...',
+  Merger: 'Fusion audio/vidéo...',
+  EmbedThumbnail: 'Intégration de la miniature...',
+  Metadata: 'Intégration des métadonnées...',
+  ExtractAudio: 'Conversion audio...',
+  VideoRemuxer: 'Finalisation du fichier...',
+  MoveFiles: 'Finalisation...',
+};
 const DOCKER_DESKTOP_PATH = 'C:\\Program Files\\Docker\\Docker\\Docker Desktop.exe';
 const OLLAMA_APP_PATH = path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Ollama', 'ollama app.exe');
 const SEARXNG_CONTAINER_NAME = 'searxng';
@@ -154,8 +169,15 @@ async function fetchPageText(url, signal) {
 }
 
 function getTextParagraphs(text) {
+  // Sur certains sites, un bandeau cookies + un fil d'ariane + un texte court
+  // ("Cet article date de...") ne sont séparés que par de simples retours à la
+  // ligne, pas une ligne vide : découper uniquement sur les lignes vides les
+  // fait fusionner avec le vrai synopsis qui suit dans le même bloc "candidat".
+  // On découpe donc sur CHAQUE retour à la ligne - les lignes courtes de menu
+  // sont éliminées par le filtre de longueur, les vrais paragraphes de prose ne
+  // contiennent généralement pas de retour à la ligne interne et restent entiers.
   return String(text || '')
-    .split(/\n{2,}/)
+    .split(/\n+/)
     .map((p) => p.trim())
     .filter((p) => p.length > 80 && /[.!?]/.test(p))
     .slice(0, 20);
@@ -674,6 +696,12 @@ async function generateJellyfinMetadata(finalFilePath, isAudio, categoryName, ov
   }
 }
 
+let cancelCurrentDownload = null;
+
+ipcMain.on('cancel-download', () => {
+  cancelCurrentDownload?.();
+});
+
 ipcMain.handle('download', async (event, { url, quality, destFolder, category, overrides }) => {
   if (!isValidUrl(url)) {
     throw new Error('Lien invalide.');
@@ -688,6 +716,10 @@ ipcMain.handle('download', async (event, { url, quality, destFolder, category, o
     ...(await getYtDlpJsRuntimeArgs()),
     '--no-playlist',
     '--newline',
+    // --print met yt-dlp en mode "sortie silencieuse" par défaut (il ne montre
+    // plus que la valeur imprimée) : sans --progress, toute la progression du
+    // téléchargement disparaît, alors même que celui-ci se déroule normalement.
+    '--progress',
     '-f', preset.format,
     '-o', path.join(outputDir, '%(title)s.%(ext)s'),
     '--write-info-json',
@@ -712,6 +744,16 @@ ipcMain.handle('download', async (event, { url, quality, destFolder, category, o
     let stderr = '';
     let lastLine = '';
     let finalFilePath = null;
+    let cancelled = false;
+    let lastProgressAt = 0;
+
+    cancelCurrentDownload = () => {
+      cancelled = true;
+      // yt-dlp.exe relance un sous-processus pour le téléchargement réel : le tuer
+      // seul (child.kill()) laisse ce sous-processus continuer en arrière-plan.
+      // /T tue tout l'arbre de processus.
+      execFile('taskkill', ['/pid', String(child.pid), '/T', '/F'], () => {});
+    };
 
     child.stdout.on('data', (data) => {
       const lines = data.toString().split(/\r|\n/).filter(Boolean);
@@ -723,12 +765,27 @@ ipcMain.handle('download', async (event, { url, quality, destFolder, category, o
         }
         const percentMatch = line.match(/\[download\]\s+([\d.]+)%/);
         if (percentMatch) {
+          const percent = parseFloat(percentMatch[1]);
+          // Beaucoup de lignes de progression peuvent arriver en quelques millisecondes
+          // (petits fichiers, bonne connexion) : sans limiter la fréquence, les mises à
+          // jour de la barre s'accumulent plus vite que le rendu ne peut en afficher, et
+          // elle semble figée jusqu'à la toute dernière (100%).
+          const now = Date.now();
+          if (percent < 100 && now - lastProgressAt < 200) continue;
+          lastProgressAt = now;
           const speedMatch = line.match(/at\s+([\d.]+\w+\/s)/);
           const etaMatch = line.match(/ETA\s+([\d:]+)/);
           event.sender.send('download-progress', {
-            percent: parseFloat(percentMatch[1]),
+            percent,
             speed: speedMatch ? speedMatch[1] : null,
             eta: etaMatch ? etaMatch[1] : null,
+          });
+          continue;
+        }
+        const stageMatch = line.match(/^\[(\w+)\]/);
+        if (stageMatch) {
+          event.sender.send('download-progress', {
+            stage: DOWNLOAD_STAGE_LABELS[stageMatch[1]] || 'Traitement en cours...',
           });
         }
       }
@@ -738,6 +795,11 @@ ipcMain.handle('download', async (event, { url, quality, destFolder, category, o
     child.on('error', reject);
 
     child.on('close', async (code) => {
+      cancelCurrentDownload = null;
+      if (cancelled) {
+        reject(new Error('Téléchargement annulé.'));
+        return;
+      }
       if (code !== 0) {
         reject(new Error(stderr.trim() || lastLine || `yt-dlp a échoué (code ${code}).`));
         return;
@@ -748,6 +810,12 @@ ipcMain.handle('download', async (event, { url, quality, destFolder, category, o
         } catch (err) {
           console.error('Génération des métadonnées Jellyfin échouée:', err);
         }
+      }
+      if (Notification.isSupported()) {
+        const name = finalFilePath
+          ? path.basename(finalFilePath, path.extname(finalFilePath))
+          : 'Téléchargement';
+        new Notification({ title: 'Téléchargement terminé', body: name }).show();
       }
       resolve({ outputDir });
     });
@@ -814,10 +882,38 @@ function extractYoutubeId(url) {
   return match ? match[1] : null;
 }
 
+function extractDomain(url) {
+  try {
+    return new URL(url).hostname.replace(/^www\./, '');
+  } catch {
+    return '';
+  }
+}
+
 let crossRefAbortController = null;
 
 ipcMain.on('cancel-cross-reference', () => {
   crossRefAbortController?.abort();
+});
+
+// La description de la vidéo elle-même contient souvent déjà le réalisateur, le
+// pays, l'année et le genre (ex: "Documentaire de Léo Favier (France, 2022,
+// 1h22mn)") : pas besoin d'attendre une recherche de source alternative pour
+// les récupérer, l'IA peut les repérer directement dans le texte fourni par
+// yt-dlp au moment de l'analyse.
+ipcMain.handle('extract-video-metadata', async (_event, { title, description }) => {
+  const { ollamaModel } = readSettings();
+  if (!ollamaModel || !description) return null;
+
+  try {
+    const genreList = GENRE_LIST.join(', ');
+    const prompt = `Voici le titre et la description d'une vidéo YouTube :\n\nTitre : ${title}\n\nDescription :\n${description}\n\nExtrait de cette description les informations suivantes si elles sont présentes, et RÉPONDS UNIQUEMENT avec un objet JSON (rien d'autre, pas de markdown) au format exact :\n{"director": "réalisateur/réalisatrice ou null", "year": "année de production ou null", "country": "nationalité/pays de production ou null", "production": "société de production ou null", "presenter": "présentateur/animateur ou null", "genres": "genres ou null"}\n\nCe type de description contient souvent une ligne de crédits compacte, par exemple :\n"Documentaire de Léo Favier (France, 2022, 1h22mn)"\nCe fragment donnerait : {"director": "Léo Favier", "year": "2022", "country": "France", "genres": "Documentaire", ...} (le mot avant "de", ici "Documentaire", est aussi un indice de genre).\n\nRègles importantes :\n- N'invente ni ne devine aucune information : utilise null si un champ n'est pas présent dans le texte.\n- Pour "genres" : choisis UNIQUEMENT parmi cette liste fixe, en reprenant l'orthographe exacte : ${genreList}. Si aucun ne correspond, utilise null.`;
+    const raw = await ollamaChat(ollamaModel, prompt, null, { json: true, temperature: 0 });
+    return parseJsonLoose(raw);
+  } catch (err) {
+    console.error('Extraction des métadonnées depuis la description échouée:', err);
+    return null;
+  }
 });
 
 ipcMain.handle('find-cross-reference', async (_event, { title, uploader, description, url }) => {
@@ -845,20 +941,28 @@ ipcMain.handle('find-cross-reference', async (_event, { title, uploader, descrip
       .map((r, i) => `${i + 1}. ${r.title}\n${r.url}\n${r.content || ''}`)
       .join('\n\n');
 
-    const matchPrompt = `Voici les infos d'une vidéo YouTube :\nTitre : ${title}\nChaîne : ${uploader}\nDescription (extrait) : ${(description || '').slice(0, 500)}\n\nVoici une liste numérotée de résultats de recherche web pour cette vidéo (la vidéo elle-même a été retirée de la liste) :\n\n${resultsText}\n\nQuel numéro de résultat correspond à une version officielle de CETTE MÊME vidéo/émission disponible ailleurs (ex: rediffusion par un diffuseur comme ARTE, une institution comme l'INA, ou un site de presse officiel) ? Priorise la correspondance du TITRE et du NOM DE DOMAINE de l'URL : ce sont les signaux les plus fiables. Le champ "extrait" peut être imprécis ou tronqué, ne t'y fie pas exclusivement. Si aucun numéro ne correspond de manière fiable, réponds 0.\n\nRéponds en français sur exactement 3 lignes, dans cet ordre :\nNumero: <chiffre>\nConfiance: <faible|moyen|eleve>\nNote: <courte explication>`;
+    // On demande l'URL choisie plutôt qu'un numéro : avec un numéro, on a déjà vu
+    // le modèle donner un raisonnement correct ("...c'est sur Arte.tv...") mais
+    // répondre un chiffre qui pointe vers un tout autre résultat - le chiffre se
+    // découple de son propre raisonnement. En répondant directement l'URL, il n'y
+    // a plus d'indirection dans laquelle se tromper.
+    const matchPrompt = `Voici les infos d'une vidéo YouTube :\nTitre : ${title}\nChaîne : ${uploader}\nDescription (extrait) : ${(description || '').slice(0, 500)}\n\nVoici une liste de résultats de recherche web pour cette vidéo (la vidéo elle-même a été retirée de la liste) :\n\n${resultsText}\n\nQuel résultat correspond à une version officielle de CETTE MÊME vidéo/émission disponible ailleurs (ex: rediffusion par un diffuseur comme ARTE, une institution comme l'INA) ? Attention : un article de presse qui PARLE de la vidéo/émission (critique, actualité) n'est PAS une version officielle de la vidéo elle-même, même s'il en parle en détail - ignore ce genre de résultat. Priorise la correspondance du TITRE et du NOM DE DOMAINE de l'URL : ce sont les signaux les plus fiables. Le champ "extrait" peut être imprécis ou tronqué, ne t'y fie pas exclusivement.\n\nRéponds en français sur exactement 3 lignes, dans cet ordre :\nURL: <l'URL EXACTE du résultat choisi, copiée telle quelle depuis la liste ci-dessus, ou "aucune" si aucun résultat ne correspond de manière fiable>\nConfiance: <faible|moyen|eleve>\nNote: <courte explication>`;
 
     const matchRaw = await ollamaChat(ollamaModel, matchPrompt, signal, { temperature: 0 });
-    const numeroMatch = matchRaw.match(/Numero\s*:\s*(\d+)/i);
+    const urlMatch = matchRaw.match(/URL\s*:\s*(\S+)/i);
     const confianceMatch = matchRaw.match(/Confiance\s*:\s*(\w+)/i);
     const noteMatch = matchRaw.match(/Note\s*:\s*(.*)/i);
-    const chosenIndex = numeroMatch ? parseInt(numeroMatch[1], 10) : 0;
+    const rawUrl = urlMatch ? urlMatch[1].trim().replace(/[.,;]+$/, '') : '';
     const note = noteMatch ? noteMatch[1].trim() : '';
 
-    if (!chosenIndex || chosenIndex < 1 || chosenIndex > results.length) {
+    const matchedResult = /^aucune?$/i.test(rawUrl)
+      ? null
+      : results.find((r) => r.url === rawUrl) || results.find((r) => r.url.startsWith(rawUrl) || rawUrl.startsWith(r.url));
+
+    if (!matchedResult) {
       return { matched: false, note: note || 'Aucune source officielle fiable trouvee.' };
     }
 
-    const matchedResult = results[chosenIndex - 1];
     const confidence = confianceMatch ? confianceMatch[1].toLowerCase() : 'faible';
 
     let fields = null;

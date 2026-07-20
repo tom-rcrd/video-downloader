@@ -418,6 +418,11 @@ button:disabled {
   font-size: 1rem;
 }
 
+.cancel-msg {
+  text-align: center;
+  margin: 4px 0 0;
+}
+
 .options {
   display: flex;
   flex-direction: column;
@@ -637,7 +642,15 @@ select option {
   transition: width 0.2s ease;
 }
 
-.progress-section p {
+.progress-fill.indeterminate {
+  width: 40%;
+  position: relative;
+  left: -40%;
+  transition: none;
+  animation: analyze-indeterminate 1.1s ease-in-out infinite;
+}
+
+.progress-bar + p {
   margin: 8px 0 0;
 }
 
@@ -812,6 +825,11 @@ select option {
 
 .cross-ref-loading-modal {
   max-width: 340px;
+  text-align: center;
+}
+
+.download-progress-modal {
+  max-width: 520px;
   text-align: center;
 }
 

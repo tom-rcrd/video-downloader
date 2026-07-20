@@ -49,6 +49,17 @@
       </div>
     </div>
 
+    <div id="download-progress-overlay" class="modal-overlay hidden">
+      <div class="modal download-progress-modal">
+        <p class="modal-title">Téléchargement en cours...</p>
+        <div class="progress-bar">
+          <div id="progress-fill" class="progress-fill"></div>
+        </div>
+        <p id="progress-text" class="muted"></p>
+        <button id="download-cancel-btn" type="button" class="primary subtle cross-ref-cancel-btn">Annuler</button>
+      </div>
+    </div>
+
     <div id="docker-required-modal" class="modal-overlay hidden">
       <div class="modal">
         <div class="modal-header">
@@ -121,17 +132,12 @@
             </div>
           </section>
 
-          <section id="progress-section" class="card progress-section hidden">
-            <div class="progress-bar">
-              <div id="progress-fill" class="progress-fill"></div>
-            </div>
-            <p id="progress-text" class="muted"></p>
-          </section>
-
           <section id="done-section" class="card done-section hidden">
             <p>Téléchargement terminé.</p>
             <button id="open-folder-btn">Ouvrir le dossier</button>
           </section>
+
+          <p id="cancel-msg" class="muted cancel-msg hidden">Téléchargement annulé.</p>
 
           <button id="download-btn" class="primary hidden">Télécharger</button>
         </div>
